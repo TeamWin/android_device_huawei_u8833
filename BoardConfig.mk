@@ -78,3 +78,5 @@ BOARD_USE_CUSTOM_RECOVERY_FONT:= \"roboto_10x18.h\"
 RECOVERY_GRAPHICS_USE_LINELENGTH := true
 TW_BRIGHTNESS_PATH := /sys/devices/platform/msm_fb.524288/leds/lcd-backlight/brightness
 TW_MAX_BRIGHTNESS := 255
+TW_BOARD_CUSTOM_GRAPHICS := ../../../device/huawei/u8833/recovery/graphics.c
+
