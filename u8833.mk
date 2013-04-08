@@ -16,7 +16,7 @@
 $(call inherit-product, build/target/product/full_base_telephony.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/languages_full.mk)
 
-# Inherit u8815 vendor setup
+# Inherit u8833 vendor setup
 $(call inherit-product-if-exists, vendor/huawei/u8833/u8833-vendor.mk)
 
 # Path to overlay files
