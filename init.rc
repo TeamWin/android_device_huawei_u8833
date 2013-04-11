@@ -56,9 +56,6 @@ service recovery /sbin/sh /sbin/charge.sh
 service charge /sbin/charge_recovery
     oneshot
 
-service recovery /sbin/recovery
-    oneshot
-
 service adbd /sbin/adbd recovery
     disabled
 
