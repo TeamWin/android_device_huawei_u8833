@@ -69,6 +69,7 @@ static GGLSurface gr_framebuffer[NUM_BUFFERS];
 static GGLSurface gr_mem_surface;
 static unsigned gr_active_fb = 0;
 static unsigned double_buffering = 0;
+static int gr_is_curr_clr_opaque = 0;
 
 static int gr_fb_fd = -1;
 static int gr_vt_fd = -1;
@@ -79,21 +80,21 @@ static struct fb_fix_screeninfo fi;
 #ifdef PRINT_SCREENINFO
 static void print_fb_var_screeninfo()
 {
-	LOGI("vi.xres: %d\n", vi.xres);
-	LOGI("vi.yres: %d\n", vi.yres);
-	LOGI("vi.xres_virtual: %d\n", vi.xres_virtual);
-	LOGI("vi.yres_virtual: %d\n", vi.yres_virtual);
-	LOGI("vi.xoffset: %d\n", vi.xoffset);
-	LOGI("vi.yoffset: %d\n", vi.yoffset);
-	LOGI("vi.bits_per_pixel: %d\n", vi.bits_per_pixel);
-	LOGI("vi.grayscale: %d\n", vi.grayscale);
+	printf("vi.xres: %d\n", vi.xres);
+	printf("vi.yres: %d\n", vi.yres);
+	printf("vi.xres_virtual: %d\n", vi.xres_virtual);
+	printf("vi.yres_virtual: %d\n", vi.yres_virtual);
+	printf("vi.xoffset: %d\n", vi.xoffset);
+	printf("vi.yoffset: %d\n", vi.yoffset);
+	printf("vi.bits_per_pixel: %d\n", vi.bits_per_pixel);
+	printf("vi.grayscale: %d\n", vi.grayscale);
 }
 #endif
 
 static int get_framebuffer(GGLSurface *fb)
 {
     int fd;
-    void *bits, *vi2;
+    void *bits;
 
     fd = open("/dev/graphics/fb0", O_RDWR);
     if (fd < 0) {
@@ -101,16 +102,12 @@ static int get_framebuffer(GGLSurface *fb)
         return -1;
     }
 
-	vi2 = malloc(sizeof(vi) + sizeof(__u32));
-
-    if (ioctl(fd, FBIOGET_VSCREENINFO, vi2) < 0) {
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &vi) < 0) {
         perror("failed to get fb0 info");
         close(fd);
-		free(vi2);
         return -1;
     }
-	memcpy((void*) &vi, vi2, sizeof(vi));
-	free(vi2);
+
     fprintf(stderr, "Pixel format: %dx%d @ %dbpp\n", vi.xres, vi.yres, vi.bits_per_pixel);
 
     vi.bits_per_pixel = PIXEL_SIZE * 8;
@@ -195,7 +192,7 @@ static int get_framebuffer(GGLSurface *fb)
     fb->width = vi.xres;
     fb->height = vi.yres;
 #ifdef BOARD_HAS_JANKY_BACKBUFFER
-    LOGI("setting JANKY BACKBUFFER\n");
+    printf("setting JANKY BACKBUFFER\n");
     fb->stride = fi.line_length/2;
 #else
     fb->stride = vi.xres_virtual;
@@ -263,10 +260,14 @@ void gr_flip(void)
 #ifdef BOARD_HAS_FLIPPED_SCREEN
     /* flip buffer 180 degrees for devices with physicaly inverted screens */
     unsigned int i;
-    for (i = 1; i < (vi.xres * vi.yres); i++) {
-        unsigned short tmp = gr_mem_surface.data[i];
-        gr_mem_surface.data[i] = gr_mem_surface.data[(vi.xres * vi.yres * 2) - i];
-        gr_mem_surface.data[(vi.xres * vi.yres * 2) - i] = tmp;
+    unsigned int j;
+    uint8_t tmp;
+    for (i = 0; i < ((vi.xres_virtual * vi.yres)/2); i++) {
+	for (j = 0; j < PIXEL_SIZE; j++) {
+		tmp = gr_mem_surface.data[i * PIXEL_SIZE + j];
+		gr_mem_surface.data[i * PIXEL_SIZE + j] = gr_mem_surface.data[(vi.xres_virtual * vi.yres * PIXEL_SIZE) - ((i+1) * PIXEL_SIZE) + j];
+		gr_mem_surface.data[(vi.xres_virtual * vi.yres * PIXEL_SIZE) - ((i+1) * PIXEL_SIZE) + j] = tmp;
+	}
     }
 #endif
 
@@ -288,6 +289,8 @@ void gr_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a
     color[2] = ((b << 8) | b) + 1;
     color[3] = ((a << 8) | a) + 1;
     gl->color4xv(gl, color);
+
+    gr_is_curr_clr_opaque = (a == 255);
 }
 
 int gr_measureEx(const char *s, void* font)
@@ -304,6 +307,30 @@ int gr_measureEx(const char *s, void* font)
         off -= 32;
         if (off < 96)
             total += (fnt->offset[off+1] - fnt->offset[off]);
+    }
+    return total;
+}
+
+int gr_maxExW(const char *s, void* font, int max_width)
+{
+    GRFont* fnt = (GRFont*) font;
+    int total = 0;
+    unsigned pos;
+    unsigned off;
+
+    if (!fnt)   fnt = gr_font;
+
+    while ((off = *s++))
+    {
+        off -= 32;
+        if (off < 96) {
+            max_width -= (fnt->offset[off+1] - fnt->offset[off]);
+			if (max_width > 0) {
+				total++;
+			} else {
+				return total;
+			}
+		}
     }
     return total;
 }
@@ -463,8 +490,15 @@ int twgr_text(int x, int y, const char *s)
 void gr_fill(int x, int y, int w, int h)
 {
     GGLContext *gl = gr_context;
+
+    if(gr_is_curr_clr_opaque)
+        gl->disable(gl, GGL_BLEND);
+
     gl->disable(gl, GGL_TEXTURE_2D);
     gl->recti(gl, x, y, x + w, y + h);
+
+    if(gr_is_curr_clr_opaque)
+        gl->enable(gl, GGL_BLEND);
 }
 
 void gr_blit(gr_surface source, int sx, int sy, int w, int h, int dx, int dy) {
@@ -473,13 +507,21 @@ void gr_blit(gr_surface source, int sx, int sy, int w, int h, int dx, int dy) {
     }
 
     GGLContext *gl = gr_context;
-    gl->bindTexture(gl, (GGLSurface*) source);
+    GGLSurface *surface = (GGLSurface*)source;
+
+    if(surface->format == GGL_PIXEL_FORMAT_RGBX_8888)
+        gl->disable(gl, GGL_BLEND);
+
+    gl->bindTexture(gl, surface);
     gl->texEnvi(gl, GGL_TEXTURE_ENV, GGL_TEXTURE_ENV_MODE, GGL_REPLACE);
     gl->texGeni(gl, GGL_S, GGL_TEXTURE_GEN_MODE, GGL_ONE_TO_ONE);
     gl->texGeni(gl, GGL_T, GGL_TEXTURE_GEN_MODE, GGL_ONE_TO_ONE);
     gl->enable(gl, GGL_TEXTURE_2D);
     gl->texCoord2i(gl, sx - dx, sy - dy);
     gl->recti(gl, dx, dy, dx + w, dy + h);
+
+    if(surface->format == GGL_PIXEL_FORMAT_RGBX_8888)
+        gl->enable(gl, GGL_BLEND);
 }
 
 unsigned int gr_get_width(gr_surface surface) {
